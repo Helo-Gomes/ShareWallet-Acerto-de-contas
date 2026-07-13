@@ -6,7 +6,6 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
-// RegistrarDespesaRetroativaRequest.java
 public record RegistrarDespesaRetroativaRequest(
         @NotBlank(message = "Descrição obrigatória")
         @Size(max = 150, message = "Descrição deve ter no máximo 150 caracteres")
