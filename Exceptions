@@ -1,0 +1,33 @@
+// RecursoNaoEncontradoException
+public class RecursoNaoEncontradoException extends RuntimeException {
+    // 404 Not Found.
+    public RecursoNaoEncontradoException(String message) {
+        super(message);
+    }
+}
+// ConflitoDeEstadoException
+
+public class ConflitoDeEstadoException extends RuntimeException {
+    // 409 Conflict.
+    public ConflitoDeEstadoException(String message) {
+        super(message);
+    }
+}
+
+// ValidacaoException.java
+
+public class ValidacaoException extends RuntimeException {
+    //  400 Bad Request.
+    public ValidacaoException(String message) {
+        super(message);
+    }
+}
+
+// AcessoNegadoException.java
+
+public class AcessoNegadoException extends RuntimeException {
+    // 403 Forbidden.
+    public AcessoNegadoException(String message) {
+        super(message);
+    }
+}
