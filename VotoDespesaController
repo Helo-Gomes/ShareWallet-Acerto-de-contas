@@ -1,0 +1,28 @@
+
+@RestController
+@RequestMapping("/api/despesas")
+public class VotoDespesaController {
+
+    private final VotoDespesaService votoDespesaService;
+
+    public VotoDespesaController(VotoDespesaService votoDespesaService) {
+        this.votoDespesaService = votoDespesaService;
+    }
+
+    @PostMapping("/{id}/votar")
+    public ResponseEntity<VotoDespesaResponse> votar(
+            @PathVariable Long id,
+            @RequestBody @Valid VotarDespesaRequest request) {
+
+        // TODO pegar o id do participante autenticado via token 
+        Long participanteId = 1L; // placeholder até a autenticação estar pronta
+
+        VotoDespesaResponse response = votoDespesaService.votar(id, participanteId, request);
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping("/{id}/votos")
+    public ResponseEntity<VotoDespesaResponse> consultarVotos(@PathVariable Long id) {
+        return ResponseEntity.ok(votoDespesaService.consultarVotos(id));
+    }
+}
