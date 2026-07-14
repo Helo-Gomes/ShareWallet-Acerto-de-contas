@@ -1,0 +1,97 @@
+package com.bradesco.sharebra;
+
+import com.bradesco.sharebra.dtos.VotarDespesaRequest;
+import com.bradesco.sharebra.dtos.VotoDespesaResponse;
+import com.bradesco.sharebra.entity.DespesaRetroativa;
+import com.bradesco.sharebra.entity.VotoDespesaEntity;
+import com.bradesco.sharebra.repository.DespesaRetroativaRepository;
+import com.bradesco.sharebra.repository.VotoDespesaRepository;
+import jakarta.transaction.Transactional;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+
+@Service
+public class VotoDespesaService {
+
+    private final VotoDespesaRepository votoRepository;
+    private final DespesaRetroativaRepository despesaRepository;
+
+    public VotoDespesaService(VotoDespesaRepository votoRepository,
+                              DespesaRetroativaRepository despesaRepository) {
+        this.votoRepository = votoRepository;
+        this.despesaRepository = despesaRepository;
+    }
+
+    @Transactional
+    public VotoDespesaResponse votar(Long despesaId, Long participanteId, VotarDespesaRequest request) {
+
+        DespesaRetroativa despesa = despesaRepository.findById(despesaId).orElse(null);
+        if (despesa == null) {
+            throw new RecursoNaoEncontradoException("Despesa não encontrada");
+        }
+        // Busca a despesa que está sendo votada.
+
+        if (despesa.getStatusDespesa() != StatusDespesaRetroativa.PENDENTE_APROVACAO) {
+            throw new ConflitoDeEstadoException("Despesa não está pendente de aprovação");
+        }
+        // impede voto depois que a decisão já foi tomada.
+
+        Optional<VotoDespesaEntity> votoOpt =
+                votoRepository.findByDespesaIdAndParticipanteId(despesaId, participanteId);
+
+        if (votoOpt.isEmpty()) {
+            throw new AcessoNegadoException("Usuário não é participante do grupo");
+        }
+
+        VotoDespesaEntity votoEntity = votoOpt.get();
+
+        if (votoEntity.getVoto() != null) {
+            throw new ValidacaoException("Usuário já votou nesta despesa");
+        }
+
+        votoEntity.setVoto(request.getVoto());
+        votoEntity.setDataVoto(LocalDateTime.now());
+        votoRepository.save(votoEntity);
+        // Registra o voto 
+
+        long votosAprovar = votoRepository.countByDespesaIdAndVoto(despesaId, VotoDespesa.APROVAR);
+        long votosRejeitar = votoRepository.countByDespesaIdAndVoto(despesaId, VotoDespesa.REJEITAR);
+        long totalVotos = votosAprovar + votosRejeitar;
+        // recalcula a contagem geral já incluindo o voto que acabou de ser salvo.
+
+        boolean recalculou = false;
+
+        if (totalVotos >= despesa.getVotosNecessarios()) {
+            // Só decide o resultado final quando TODOS os  participantes já votaram
+            if (votosAprovar >= votosRejeitar) {
+                despesa.setStatusDespesa(StatusDespesaRetroativa.APROVADA);
+                despesaRepository.save(despesa);
+
+                // TODO chamar recálculo de saldo aqui quando SaldoService tiver esse método recalculou = true;
+
+            } else {
+                despesa.setStatusDespesa(StatusDespesaRetroativa.REJEITADA);
+                despesaRepository.save(despesa);
+                // Maioria rejeitou — despesa não entra no cálculo.
+            }
+        }
+        // Se totalVotos ainda não bateu votosNecessarios, a despesa continua PENDENTE_APROVACAO 
+        return new VotoDespesaResponse(despesaId, despesa.getStatusDespesa(), votosAprovar, votosRejeitar, recalculou);
+    }
+
+    public VotoDespesaResponse consultarVotos(Long despesaId) {
+        // Método só de LEITURA
+
+        DespesaRetroativa despesa = despesaRepository.findById(despesaId).orElse(null);
+        if (despesa == null) {
+            throw new RecursoNaoEncontradoException("Despesa não encontrada");
+        }
+
+        long votosAprovar = votoRepository.countByDespesaIdAndVoto(despesaId, VotoDespesa.APROVAR);
+        long votosRejeitar = votoRepository.countByDespesaIdAndVoto(despesaId, VotoDespesa.REJEITAR);
+
+        return new VotoDespesaResponse(despesaId, despesa.getStatusDespesa(), votosAprovar, votosRejeitar, false);
+
+    }
+}
