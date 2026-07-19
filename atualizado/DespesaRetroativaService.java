@@ -1,109 +1,88 @@
-// DespesaRetroativaService.java
 package com.bradesco.sharewallet.Services;
 
 import com.bradesco.sharewallet.Entities.*;
-import com.bradesco.sharewallet.Exceptions.AcessoNegadoException;
-import com.bradesco.sharewallet.Exceptions.ConflitoDeEstadoException;
-import com.bradesco.sharewallet.Exceptions.RecursoNaoEncontradoException;
-import com.bradesco.sharewallet.Exceptions.ValidacaoException;
-import com.bradesco.sharewallet.Repositories.*;
-import com.bradesco.sharewallet.dto.DespesaRetroativaResponse;
-import com.bradesco.sharewallet.dto.RegistrarDespesaRetroativaRequest;
+import com.bradesco.sharewallet.Exceptions.*;
+import com.bradesco.sharewallet.Repositories.DespesaRetroativaRepository;
+import com.bradesco.sharewallet.Repositories.VotoDespesaRepository;
+import com.bradesco.sharewallet.dto.VotarDespesaRequest;
+import com.bradesco.sharewallet.dto.VotoDespesaResponse;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Optional;
 
 @Service
-public class DespesaRetroativaService {
+public class VotoDespesaService {
 
-    private final DespesaRetroativaRepository despesaRetroativaRepository;
     private final VotoDespesaRepository votoRepository;
-    private final GrupoRepository grupoRepository;
-    private final ParticipanteRepository participanteRepository;
+    private final DespesaRetroativaRepository despesaRepository;
 
-    public DespesaRetroativaService(DespesaRetroativaRepository despesaRetroativaRepository,
-                                     VotoDespesaRepository votoRepository,
-                                     GrupoRepository grupoRepository,
-                                     ParticipanteRepository participanteRepository) {
-        this.despesaRetroativaRepository = despesaRetroativaRepository;
+    public VotoDespesaService(VotoDespesaRepository votoRepository,
+                               DespesaRetroativaRepository despesaRepository) {
         this.votoRepository = votoRepository;
-        this.grupoRepository = grupoRepository;
-        this.participanteRepository = participanteRepository;
+        this.despesaRepository = despesaRepository;
     }
 
     @Transactional
-    public DespesaRetroativaResponse registrar(Long grupoId, Long criadorParticipanteId, RegistrarDespesaRetroativaRequest request) {
+    public VotoDespesaResponse votar(Long despesaId, Long participanteId, VotarDespesaRequest request) {
 
-        Grupo grupo = grupoRepository.findById(grupoId).orElse(null);
-        if (grupo == null) {
-            throw new RecursoNaoEncontradoException("Grupo não encontrado");
+        DespesaRetroativa despesa = despesaRepository.findById(despesaId).orElse(null);
+        if (despesa == null) {
+            throw new RecursoNaoEncontradoException("Despesa não encontrada");
         }
 
-        if (grupo.getStatus() != StatusGrupo.ACERTO_DE_CONTAS) {
-            throw new ConflitoDeEstadoException("Grupo não está em fase de acerto de contas");
+        if (despesa.getStatusDespesa() != StatusDespesaRetroativa.PENDENTE_APROVACAO) {
+            throw new ConflitoDeEstadoException("Despesa não está pendente de aprovação");
         }
 
-        List<Participante> participantesDoGrupo = participanteRepository.findByGrupoId(grupoId);
+        Optional<VotoDespesaEntity> votoOpt =
+            votoRepository.findByDespesaIdAndParticipanteId(despesaId, participanteId);
 
-        Participante criador = null;
-        for (Participante p : participantesDoGrupo) {
-            if (p.getIdParticipante().equals(criadorParticipanteId)) {
-                criador = p;
-            }
-        }
-        if (criador == null) {
+        if (votoOpt.isEmpty()) {
             throw new AcessoNegadoException("Usuário não é participante do grupo");
         }
 
-        List<Long> idsParticipantesDoGrupo = new ArrayList<>();
-        for (Participante p : participantesDoGrupo) {
-            idsParticipantesDoGrupo.add(p.getIdParticipante());
+        VotoDespesaEntity votoEntity = votoOpt.get();
+
+        if (votoEntity.getVoto() != null) {
+            throw new ValidacaoException("Usuário já votou nesta despesa");
         }
 
-        for (Long idInformado : request.getParticipantesIds()) {
-            if (!idsParticipantesDoGrupo.contains(idInformado)) {
-                throw new ValidacaoException("Participante " + idInformado + " não pertence ao grupo");
-            }
+        votoEntity.setVoto(request.getVoto());
+        votoEntity.setDataVoto(LocalDateTime.now());
+        votoRepository.save(votoEntity);
+
+        long votosAprovar = votoRepository.countByDespesaIdAndVoto(despesaId, VotoDespesa.APROVAR);
+        long votosRejeitar = votoRepository.countByDespesaIdAndVoto(despesaId, VotoDespesa.REJEITAR);
+
+        boolean recalculou = false;
+
+        long votosNecessarios = despesa.getVotosNecessarios();
+        long maioriaNecessaria = (votosNecessarios + 1) / 2;
+
+        if (votosAprovar >= maioriaNecessaria) {
+            despesa.setStatusDespesa(StatusDespesaRetroativa.APROVADA);
+            despesaRepository.save(despesa);
+            recalculou = true;
+
+        } else if (votosRejeitar >= maioriaNecessaria) {
+            despesa.setStatusDespesa(StatusDespesaRetroativa.REJEITADA);
+            despesaRepository.save(despesa);
         }
 
-        if (request.getDataHorario().isAfter(LocalDateTime.now())) {
-            throw new ValidacaoException("Data/horário não pode ser futura");
+        return new VotoDespesaResponse(despesaId, despesa.getStatusDespesa(), votosAprovar, votosRejeitar, recalculou);
+    }
+
+    public VotoDespesaResponse consultarVotos(Long despesaId) {
+        DespesaRetroativa despesa = despesaRepository.findById(despesaId).orElse(null);
+        if (despesa == null) {
+            throw new RecursoNaoEncontradoException("Despesa não encontrada");
         }
 
-        List<Participante> participantesEnvolvidos = new ArrayList<>();
-        for (Participante p : participantesDoGrupo) {
-            if (request.getParticipantesIds().contains(p.getIdParticipante())) {
-                participantesEnvolvidos.add(p);
-            }
-        }
+        long votosAprovar = votoRepository.countByDespesaIdAndVoto(despesaId, VotoDespesa.APROVAR);
+        long votosRejeitar = votoRepository.countByDespesaIdAndVoto(despesaId, VotoDespesa.REJEITAR);
 
-        DespesaRetroativa despesa = new DespesaRetroativa();
-        despesa.setGrupo(grupo);
-        despesa.setCriador(criador);
-        despesa.setDescricao(request.getDescricao());
-        despesa.setValor(request.getValor());
-        despesa.setMeioPagamento(request.getMeioPagamento());
-        despesa.setDataHorario(request.getDataHorario());
-        despesa.setStatusDespesa(StatusDespesaRetroativa.PENDENTE_APROVACAO);
-        despesa.setVotosNecessarios(participantesDoGrupo.size() - 1);
-        despesa.setParticipantes(participantesEnvolvidos);
-
-        DespesaRetroativa salva = despesaRetroativaRepository.save(despesa);
-
-        List<VotoDespesaEntity> votos = new ArrayList<>();
-        for (Participante p : participantesDoGrupo) {
-            if (!p.getIdParticipante().equals(criador.getIdParticipante())) {
-                VotoDespesaEntity v = new VotoDespesaEntity();
-                v.setDespesa(salva);
-                v.setParticipante(p);
-                votos.add(v);
-            }
-        }
-        votoRepository.saveAll(votos);
-
-        return DespesaRetroativaResponse.fromEntity(salva, 0);
+        return new VotoDespesaResponse(despesaId, despesa.getStatusDespesa(), votosAprovar, votosRejeitar, false);
     }
 }
