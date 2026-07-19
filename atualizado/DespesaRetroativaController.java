@@ -1,10 +1,9 @@
 // DespesaRetroativaController.java
-package com.bradesco.sharewallet.Controller;
+package com.bradesco.sharewallet.Controllers;
 
-
-import com.bradesco.sharewallet.DTO.DespesaRetroativaResponse;
-import com.bradesco.sharewallet.DTO.RegistrarDespesaRetroativaRequest;
-import com.bradesco.sharewallet.Service.DespesaRetroativaService;
+import com.bradesco.sharewallet.Services.DespesaRetroativaService;
+import com.bradesco.sharewallet.dto.DespesaRetroativaResponse;
+import com.bradesco.sharewallet.dto.RegistrarDespesaRetroativaRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -23,8 +22,12 @@ public class DespesaRetroativaController {
     @PostMapping("/grupos/{id}/despesas/retroativas")
     public ResponseEntity<DespesaRetroativaResponse> registrar(
             @PathVariable Long id,
+            @RequestParam Long criadorParticipanteId,
             @RequestBody @Valid RegistrarDespesaRetroativaRequest request) {
-        DespesaRetroativaResponse response = despesaRetroativaService.registrar(id, request);
+
+        DespesaRetroativaResponse response =
+            despesaRetroativaService.registrar(id, criadorParticipanteId, request);
+
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 }
