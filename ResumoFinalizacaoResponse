@@ -1,0 +1,67 @@
+package com.bradesco.sharewallet.dto;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+public class ResumoFinalizacaoResponse {
+
+    private Long grupoId;
+    private String statusGrupo;
+    private ResumoDetalhado resumo;
+
+    public ResumoFinalizacaoResponse(Long grupoId, String statusGrupo, ResumoDetalhado resumo) {
+        this.grupoId = grupoId;
+        this.statusGrupo = statusGrupo;
+        this.resumo = resumo;
+    }
+
+    public Long getGrupoId() {
+        return grupoId;
+    }
+
+    public String getStatusGrupo() {
+        return statusGrupo;
+    }
+
+    public ResumoDetalhado getResumo() {
+        return resumo;
+    }
+
+    public static class ResumoDetalhado {
+
+        private BigDecimal totalMovimentado;
+        private int totalParticipantes;
+        private int totalDespesas;
+        private int transacoesRealizadas;
+        private LocalDateTime finalizadoEm;
+
+        public ResumoDetalhado(BigDecimal totalMovimentado, int totalParticipantes,
+                                int totalDespesas, int transacoesRealizadas, LocalDateTime finalizadoEm) {
+            this.totalMovimentado = totalMovimentado;
+            this.totalParticipantes = totalParticipantes;
+            this.totalDespesas = totalDespesas;
+            this.transacoesRealizadas = transacoesRealizadas;
+            this.finalizadoEm = finalizadoEm;
+        }
+
+        public BigDecimal getTotalMovimentado() {
+            return totalMovimentado;
+        }
+
+        public int getTotalParticipantes() {
+            return totalParticipantes;
+        }
+
+        public int getTotalDespesas() {
+            return totalDespesas;
+        }
+
+        public int getTransacoesRealizadas() {
+            return transacoesRealizadas;
+        }
+
+        public LocalDateTime getFinalizadoEm() {
+            return finalizadoEm;
+        }
+    }
+}
