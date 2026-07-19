@@ -1,0 +1,124 @@
+
+package com.bradesco.sharewallet.Services;
+
+import com.bradesco.sharewallet.Entities.*;
+import com.bradesco.sharewallet.Exceptions.AcessoNegadoException;
+import com.bradesco.sharewallet.Exceptions.ConflitoDeEstadoException;
+import com.bradesco.sharewallet.Exceptions.RecursoNaoEncontradoException;
+import com.bradesco.sharewallet.Exceptions.ValidacaoException;
+import com.bradesco.sharewallet.Repositories.*;
+import com.bradesco.sharewallet.dto.ResumoFinalizacaoResponse;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+
+@Service
+public class FinalizacaoGrupoService {
+
+    private final GrupoRepository grupoRepository;
+    private final TransacaoAcertoRepository transacaoRepository;
+    private final DespesaRepository despesaRepository;
+    private final ParticipanteRepository participanteRepository;
+
+    public FinalizacaoGrupoService(GrupoRepository grupoRepository,
+                                    TransacaoAcertoRepository transacaoRepository,
+                                    DespesaRepository despesaRepository,
+                                    ParticipanteRepository participanteRepository) {
+        this.grupoRepository = grupoRepository;
+        this.transacaoRepository = transacaoRepository;
+        this.despesaRepository = despesaRepository;
+        this.participanteRepository = participanteRepository;
+    }
+
+    @Transactional
+    public ResumoFinalizacaoResponse finalizar(Long grupoId, Long solicitanteParticipanteId) {
+
+        Grupo grupo = grupoRepository.findById(grupoId).orElse(null);
+        if (grupo == null) {
+            throw new RecursoNaoEncontradoException("Grupo não encontrado");
+        }
+        // 404 — "Grupo não encontrado"
+
+        Optional<Participante> solicitante = participanteRepository
+            .findByGrupoIdAndUsuarioId(grupoId, solicitanteParticipanteId);
+        // Nota: aqui uso "solicitanteParticipanteId" como se fosse
+        // id_usuario, seguindo o padrão do resto do projeto até o
+        // Security estar pronto. Ajuste conforme o método real do
+        // seu ParticipanteRepository.
+
+        if (solicitante.isEmpty()) {
+            throw new AcessoNegadoException("Usuário não é participante do grupo");
+        }
+        // 403 — "Usuário não é participante do grupo"
+
+        if (grupo.getStatus() == StatusGrupo.FINALIZADO) {
+            throw new ValidacaoException("Grupo já está finalizado");
+        }
+        // 400 — "Grupo já está finalizado"
+        // Nota: a doc pede 400 aqui, não 409 (diferente do que eu
+        // tinha implementado antes) — por isso troquei pra
+        // ValidacaoException, que já está mapeada pra 400 no
+        // GlobalExceptionHandler.
+
+        if (grupo.getStatus() != StatusGrupo.ENCERRAMENTO_DE_ACERTO) {
+            throw new ConflitoDeEstadoException("Grupo não está em fase de encerramento de acerto");
+        }
+        // Regra adicional da doc: "O grupo deve estar com status
+        // ENCERRAMENTO_DE_ACERTO (ou o status que antecede a
+        // finalização)" — cobre o caso de tentar finalizar um
+        // grupo que ainda está em ACERTO_DE_CONTAS, por exemplo.
+
+        boolean todasConfirmadas = !transacaoRepository
+            .existsByParticipante_Grupo_IdAndStatusTransacaoNot(grupoId, StatusTransacao.CONFIRMADA);
+
+        if (!todasConfirmadas) {
+            throw new ConflitoDeEstadoException("Nem todas as transações de pagamento estão confirmadas");
+        }
+        // Cobre "Todas as transações de pagamento devem estar com
+        // status CONFIRMADA" — mapeado como 409, já que é um erro
+        // de conflito de estado (grupo existe, só não está pronto).
+
+        LocalDateTime agora = LocalDateTime.now();
+
+        grupo.setStatus(StatusGrupo.FINALIZADO);
+        grupo.setFinalizadoEm(agora);
+        grupoRepository.save(grupo);
+
+        return montarResumo(grupoId, grupo.getStatus().name(), agora);
+    }
+
+    public ResumoFinalizacaoResponse buscarResumo(Long grupoId) {
+        Grupo grupo = grupoRepository.findById(grupoId).orElse(null);
+        if (grupo == null) {
+            throw new RecursoNaoEncontradoException("Grupo não encontrado");
+        }
+
+        return montarResumo(grupoId, grupo.getStatus().name(), grupo.getFinalizadoEm());
+    }
+
+    private ResumoFinalizacaoResponse montarResumo(Long grupoId, String statusGrupo, LocalDateTime finalizadoEm) {
+
+        List<TransacaoAcerto> transacoes = transacaoRepository.findByParticipante_Grupo_Id(grupoId);
+
+        BigDecimal totalMovimentado = BigDecimal.ZERO;
+        for (TransacaoAcerto t : transacoes) {
+            totalMovimentado = totalMovimentado.add(t.getValor());
+        }
+
+        int totalParticipantes = participanteRepository.findByGrupoId(grupoId).size();
+        int totalDespesas = despesaRepository.countByGrupoId(grupoId);
+        int transacoesRealizadas = transacoes.size();
+
+        return new ResumoFinalizacaoResponse(
+            grupoId,
+            statusGrupo,
+            new ResumoFinalizacaoResponse.ResumoDetalhado(
+                totalMovimentado, totalParticipantes, totalDespesas, transacoesRealizadas, finalizadoEm
+            )
+        );
+    }
+}
