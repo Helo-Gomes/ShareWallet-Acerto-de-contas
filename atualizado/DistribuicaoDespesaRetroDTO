@@ -1,0 +1,23 @@
+package com.bradesco.sharewallet.dto;
+
+import com.bradesco.sharewallet.Entities.DistribuicaoDespesaRetro;
+import com.bradesco.sharewallet.Entities.StatusDistribuicaoDespesa;
+
+import java.math.BigDecimal;
+
+public record DistribuicaoDespesaDTO(
+    Long idDistribuicao,
+    Long idParticipante,
+    BigDecimal valorParcela,
+    StatusDistribuicaoDespesa status
+) {
+    // Construtor que recebe a Entity e delega para o construtor canônico
+    public DistribuicaoDespesaDTO(DistribuicaoDespesaRetro entity) {
+        this(
+            entity.getId(),
+            entity.getParticipante().getIdParticipante(),
+            entity.getValorParcela(),
+            entity.getStatus()
+        );
+    }
+}
