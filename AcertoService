@@ -1,0 +1,135 @@
+
+package com.bradesco.sharewallet.Services;
+
+import com.bradesco.sharewallet.Entities.*;
+import com.bradesco.sharewallet.Exceptions.ConflitoDeEstadoException;
+import com.bradesco.sharewallet.Exceptions.RecursoNaoEncontradoException;
+import com.bradesco.sharewallet.Repositories.GrupoRepository;
+import com.bradesco.sharewallet.Repositories.ParticipanteRepository;
+import com.bradesco.sharewallet.Repositories.TransacaoAcertoRepository;
+import com.bradesco.sharewallet.dto.SelecionarPagamentoRequest;
+import com.bradesco.sharewallet.dto.TransacaoAcertoResponse;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+@Service
+public class AcertoService {
+
+    private final TransacaoAcertoRepository transacaoAcertoRepository;
+    private final GrupoRepository grupoRepository;
+    private final ParticipanteRepository participanteRepository;
+
+    public AcertoService(TransacaoAcertoRepository transacaoAcertoRepository,
+                          GrupoRepository grupoRepository,
+                          ParticipanteRepository participanteRepository) {
+        this.transacaoAcertoRepository = transacaoAcertoRepository;
+        this.grupoRepository = grupoRepository;
+        this.participanteRepository = participanteRepository;
+    }
+   
+
+    @Transactional
+    public List<TransacaoAcertoResponse> iniciarAcerto(Long grupoId) {
+
+        Grupo grupo = grupoRepository.findById(grupoId).orElse(null);
+        if (grupo == null) {
+            throw new RecursoNaoEncontradoException("Grupo não encontrado");
+        }
+
+        List<Participante> participantesDoGrupo = participanteRepository.findByGrupoId(grupoId);
+
+        List<TransacaoAcerto> transacoes = new ArrayList<>();
+
+        for (Participante p : participantesDoGrupo) {
+
+            BigDecimal saldo = p.getSaldoGrupo();
+            // Lê o saldo já calculado incrementalmente pelo
+            // DistribuicaoDespesaRetroService (e futuramente
+            // também pela distribuição de despesas normais, que
+            // o Carlos está fazendo).
+
+            if (saldo.compareTo(BigDecimal.ZERO) == 0) {
+                continue;
+                // Participante quite não gera transação — igual
+                // fazíamos antes, só que agora sem precisar
+                // calcular nada, o "== 0" já vem pronto do banco.
+            }
+
+            TransacaoAcerto t = new TransacaoAcerto();
+            t.setParticipante(p);
+            t.setValor(saldo.abs());
+            t.setStatusTransacao(StatusTransacao.AGUARDANDO_ENVIO);
+
+            if (saldo.signum() < 0) {
+                t.setStatusParticipante(StatusParticipanteAcerto.DEVEDOR);
+            } else {
+                t.setStatusParticipante(StatusParticipanteAcerto.CREDOR);
+            }
+
+            transacoes.add(t);
+        }
+
+        transacaoAcertoRepository.saveAll(transacoes);
+
+        return montarRespostas(transacoes, grupoId);
+    }
+
+    @Transactional
+    public TransacaoAcertoResponse selecionarPagamento(Long transacaoId, SelecionarPagamentoRequest request) {
+        // Sem mudanças aqui — continua igual ao que já tínhamos.
+
+        TransacaoAcerto t = transacaoAcertoRepository.findById(transacaoId).orElse(null);
+        if (t == null) {
+            throw new RecursoNaoEncontradoException("Transação não encontrada");
+        }
+
+        Long grupoId = t.getParticipante().getGrupo().getId();
+        Grupo grupo = grupoRepository.findById(grupoId).orElse(null);
+        if (grupo == null) {
+            throw new RecursoNaoEncontradoException("Grupo não encontrado");
+        }
+
+        if (grupo.getStatus() != StatusGrupo.ENCERRAMENTO_DE_ACERTO) {
+            throw new ConflitoDeEstadoException("Grupo não está em fase de encerramento");
+        }
+        if (t.getStatusTransacao() == StatusTransacao.CONFIRMADA) {
+            throw new ConflitoDeEstadoException("Transação já confirmada");
+        }
+        if (t.getStatusParticipante() != StatusParticipanteAcerto.DEVEDOR) {
+            throw new ConflitoDeEstadoException("Apenas devedores selecionam forma de pagamento");
+        }
+
+        t.setMeioPagamento(request.getFormaPagamento());
+        t.setStatusTransacao(StatusTransacao.CONFIRMADA);
+        t.setDataPagamento(LocalDateTime.now());
+
+        TransacaoAcerto salva = transacaoAcertoRepository.save(t);
+
+        return TransacaoAcertoResponse.fromEntity(salva, isGrupoProntoParaFinalizar(grupoId));
+    }
+
+    public List<TransacaoAcertoResponse> listarPorGrupo(Long grupoId) {
+        List<TransacaoAcerto> transacoes = transacaoAcertoRepository.findByParticipante_Grupo_Id(grupoId);
+        return montarRespostas(transacoes, grupoId);
+    }
+
+    private boolean isGrupoProntoParaFinalizar(Long grupoId) {
+        return !transacaoAcertoRepository.existsByParticipante_Grupo_IdAndStatusTransacaoNot(
+            grupoId, StatusTransacao.CONFIRMADA);
+    }
+
+    private List<TransacaoAcertoResponse> montarRespostas(List<TransacaoAcerto> transacoes, Long grupoId) {
+        boolean pronto = isGrupoProntoParaFinalizar(grupoId);
+
+        List<TransacaoAcertoResponse> respostas = new ArrayList<>();
+        for (TransacaoAcerto t : transacoes) {
+            respostas.add(TransacaoAcertoResponse.fromEntity(t, pronto));
+        }
+        return respostas;
+    }
+}
