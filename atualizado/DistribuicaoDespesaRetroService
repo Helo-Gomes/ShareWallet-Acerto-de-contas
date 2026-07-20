@@ -1,0 +1,120 @@
+package com.bradesco.sharewallet.Services;
+
+import com.bradesco.sharewallet.Entities.*;
+import com.bradesco.sharewallet.Exceptions.*;
+import com.bradesco.sharewallet.Repositories.*;
+import com.bradesco.sharewallet.dto.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+
+@Service
+public class DistribuicaoDespesaRetroService {
+
+    @Autowired
+    private DistribuicaoDespesaRetroRepository distribuicaoDespesaRetroRepository;
+
+    @Autowired
+    private DespesaRetroativaRepository despesaRetroativaRepository;
+
+    @Autowired
+    private ParticipanteRepository participanteRepository;
+
+    @Autowired
+    private GrupoRepository grupoRepository;
+
+    @Transactional
+    public List<DistribuicaoDespesaDTO> selecionarParticipantesDistribuirDespesas(
+            DadosSelecaoParticipantesDistribuicaoDTO participantesDistribuicao) {
+
+        DespesaRetroativa despesa = despesaRetroativaRepository
+            .getReferenceById(participantesDistribuicao.getIdDespesa());
+
+        List<SelecaoParticipantesDistribuicaoDespesa> lista =
+            participantesDistribuicao.getSelecaoParticipantesDistribuicaoDespesas();
+
+        List<DistribuicaoDespesaRetro> distribuicaoDespesas = new ArrayList<>();
+
+        for (SelecaoParticipantesDistribuicaoDespesa selecao : lista) {
+            Participante participante = participanteRepository.getReferenceById(selecao.getIdParticipante());
+
+            DistribuicaoDespesaRetro novaDistribuicao = new DistribuicaoDespesaRetro(
+                despesa, participante, selecao.getValorParcela(), StatusDistribuicaoDespesa.VINCULADA
+            );
+
+            distribuicaoDespesas.add(novaDistribuicao);
+        }
+
+        List<DistribuicaoDespesaRetro> listaSalva = distribuicaoDespesaRetroRepository.saveAll(distribuicaoDespesas);
+
+        List<DistribuicaoDespesaDTO> listaDTO = new ArrayList<>();
+        for (DistribuicaoDespesaRetro d : listaSalva) {
+            listaDTO.add(new DistribuicaoDespesaDTO(d));
+        }
+
+        despesa.setStatusDespesa(StatusDespesaRetroativa.APROVADA);
+        // Nota: no Carlos era StatusDespesa.DIVIDIDA — pra
+        // DespesaRetroativa não temos esse estado intermediário
+        // hoje, só PENDENTE_APROVACAO/APROVADA/REJEITADA. Uso
+        // APROVADA aqui, mas ver observação abaixo do código.
+        despesaRetroativaRepository.save(despesa);
+
+        return listaDTO;
+    }
+
+    @Transactional
+    public void atualizarSaldoParticipantes(Long idDespesa) {
+
+        DespesaRetroativa despesaADistribuir = despesaRetroativaRepository.findById(idDespesa).orElse(null);
+
+        if (despesaADistribuir == null) {
+            throw new ValidacaoException("Essa despesa não foi registrada anteriormente.");
+        }
+
+        List<DistribuicaoDespesaRetro> listaDistribuicaoDespesasAtribuidas =
+            distribuicaoDespesaRetroRepository.findAllByDespesa_Id(idDespesa);
+
+        List<Participante> participantesAtualizados = new ArrayList<>();
+
+        // Atualização saldo dos devedores/participantes envolvidos
+        for (DistribuicaoDespesaRetro distribuicaoDespesa : listaDistribuicaoDespesasAtribuidas) {
+            Participante participante = distribuicaoDespesa.getParticipante();
+            BigDecimal valorAtual = participante.getSaldoGrupo();
+            BigDecimal valorAtualizado = valorAtual.add(distribuicaoDespesa.getValorParcela().negate());
+            participante.setSaldoGrupo(valorAtualizado);
+            participantesAtualizados.add(participante);
+        }
+
+        // Atualização saldo do credor (quem pagou = o criador da despesa)
+        Participante participanteCredor = despesaADistribuir.getCriador();
+
+        boolean credorJaAtualizado = false;
+        for (Participante p : participantesAtualizados) {
+            if (p.getIdParticipante().equals(participanteCredor.getIdParticipante())) {
+                credorJaAtualizado = true;
+            }
+        }
+
+        if (!credorJaAtualizado) {
+            BigDecimal valorAtualizadoCredor = participanteCredor.getSaldoGrupo().add(despesaADistribuir.getValor());
+            participanteCredor.setSaldoGrupo(valorAtualizadoCredor);
+            participantesAtualizados.add(participanteCredor);
+        } else {
+            for (Participante p : participantesAtualizados) {
+                if (p.getIdParticipante().equals(participanteCredor.getIdParticipante())) {
+                    BigDecimal valorAtualizadoCredor = p.getSaldoGrupo().add(despesaADistribuir.getValor());
+                    p.setSaldoGrupo(valorAtualizadoCredor);
+                }
+            }
+        }
+
+        participanteRepository.saveAll(participantesAtualizados);
+
+        despesaADistribuir.setStatusDespesa(StatusDespesaRetroativa.APROVADA);
+        despesaRetroativaRepository.save(despesaADistribuir);
+    }
+}
