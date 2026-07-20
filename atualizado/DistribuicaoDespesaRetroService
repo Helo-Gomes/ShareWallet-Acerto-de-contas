@@ -1,3 +1,4 @@
+
 package com.bradesco.sharewallet.Services;
 
 import com.bradesco.sharewallet.Entities.*;
@@ -31,11 +32,46 @@ public class DistribuicaoDespesaRetroService {
     public List<DistribuicaoDespesaDTO> selecionarParticipantesDistribuirDespesas(
             DadosSelecaoParticipantesDistribuicaoDTO participantesDistribuicao) {
 
-        DespesaRetroativa despesa = despesaRetroativaRepository
-            .getReferenceById(participantesDistribuicao.getIdDespesa());
+        DespesaRetroativa despesa = despesaRetroativaRepository.findById(participantesDistribuicao.getIdDespesa())
+            .orElse(null);
+
+        if (despesa == null) {
+            throw new RecursoNaoEncontradoException("Despesa não encontrada");
+        }
+
+        if (despesa.getGrupo().getIdGrupo() == null
+                || !despesa.getGrupo().getIdGrupo().equals(participantesDistribuicao.getIdGrupo())) {
+            throw new ValidacaoException("Despesa não pertence a esse grupo");
+        }
+
+        if (despesa.getStatusDespesa() != StatusDespesaRetroativa.APROVADA) {
+            throw new ConflitoDeEstadoException("Despesa precisa estar APROVADA para ser distribuída");
+        }
+
+        if (!despesa.getCriador().getIdParticipante().equals(participantesDistribuicao.getIdUsuario())) {
+            throw new AcessoNegadoException("Apenas o criador da despesa pode distribuí-la");
+        }
 
         List<SelecaoParticipantesDistribuicaoDespesa> lista =
             participantesDistribuicao.getSelecaoParticipantesDistribuicaoDespesas();
+
+        if (lista == null || lista.size() < 2) {
+            throw new ValidacaoException("Informe pelo menos 2 participantes na distribuição");
+        }
+
+        BigDecimal somaParcelas = BigDecimal.ZERO;
+        for (SelecaoParticipantesDistribuicaoDespesa selecao : lista) {
+            if (selecao.getValorParcela() == null) {
+                throw new ValidacaoException("Todos os participantes precisam ter um valor de parcela informado");
+            }
+    
+            somaParcelas = somaParcelas.add(selecao.getValorParcela());
+        }
+
+        if (somaParcelas.compareTo(despesa.getValor()) != 0) {
+            throw new ValidacaoException("A soma das parcelas não corresponde ao valor total da despesa");
+        }
+
 
         List<DistribuicaoDespesaRetro> distribuicaoDespesas = new ArrayList<>();
 
@@ -56,14 +92,8 @@ public class DistribuicaoDespesaRetroService {
             listaDTO.add(new DistribuicaoDespesaDTO(d));
         }
 
-        despesa.setStatusDespesa(StatusDespesaRetroativa.APROVADA);
-        // Nota: no Carlos era StatusDespesa.DIVIDIDA — pra
-        // DespesaRetroativa não temos esse estado intermediário
-        // hoje, só PENDENTE_APROVACAO/APROVADA/REJEITADA. Uso
-        // APROVADA aqui, mas ver observação abaixo do código.
-        despesaRetroativaRepository.save(despesa);
-
         return listaDTO;
+
     }
 
     @Transactional
@@ -72,15 +102,23 @@ public class DistribuicaoDespesaRetroService {
         DespesaRetroativa despesaADistribuir = despesaRetroativaRepository.findById(idDespesa).orElse(null);
 
         if (despesaADistribuir == null) {
-            throw new ValidacaoException("Essa despesa não foi registrada anteriormente.");
+            throw new RecursoNaoEncontradoException("Essa despesa não foi registrada anteriormente.");
         }
+
+        if (despesaADistribuir.getStatusDespesa() != StatusDespesaRetroativa.APROVADA) {
+            throw new ConflitoDeEstadoException("Essa despesa já foi atualizada no saldo dos participantes, ou ainda não foi aprovada.");
+        }
+ 
 
         List<DistribuicaoDespesaRetro> listaDistribuicaoDespesasAtribuidas =
             distribuicaoDespesaRetroRepository.findAllByDespesa_Id(idDespesa);
 
+        if (listaDistribuicaoDespesasAtribuidas.isEmpty()) {
+            throw new ConflitoDeEstadoException("Essa despesa ainda não foi distribuída entre os participantes");
+        }
+
         List<Participante> participantesAtualizados = new ArrayList<>();
 
-        // Atualização saldo dos devedores/participantes envolvidos
         for (DistribuicaoDespesaRetro distribuicaoDespesa : listaDistribuicaoDespesasAtribuidas) {
             Participante participante = distribuicaoDespesa.getParticipante();
             BigDecimal valorAtual = participante.getSaldoGrupo();
@@ -89,7 +127,6 @@ public class DistribuicaoDespesaRetroService {
             participantesAtualizados.add(participante);
         }
 
-        // Atualização saldo do credor (quem pagou = o criador da despesa)
         Participante participanteCredor = despesaADistribuir.getCriador();
 
         boolean credorJaAtualizado = false;
@@ -114,7 +151,8 @@ public class DistribuicaoDespesaRetroService {
 
         participanteRepository.saveAll(participantesAtualizados);
 
-        despesaADistribuir.setStatusDespesa(StatusDespesaRetroativa.APROVADA);
+        despesaADistribuir.setStatusDespesa(StatusDespesaRetroativa.DISTRIBUIDA);
         despesaRetroativaRepository.save(despesaADistribuir);
+
     }
 }
