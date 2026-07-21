@@ -1,0 +1,105 @@
+package com.bradesco.sharewallet.Services;
+
+import com.bradesco.sharewallet.Entities.*;
+import com.bradesco.sharewallet.Exceptions.AcessoNegadoException;
+import com.bradesco.sharewallet.Exceptions.ConflitoDeEstadoException;
+import com.bradesco.sharewallet.Exceptions.RecursoNaoEncontradoException;
+import com.bradesco.sharewallet.Exceptions.ValidacaoException;
+import com.bradesco.sharewallet.Repositories.*;
+import com.bradesco.sharewallet.dto.ResumoFinalizacaoResponse;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
+
+@Service
+public class FinalizacaoGrupoService {
+
+    private final GrupoRepository grupoRepository;
+    private final TransacaoAcertoRepository transacaoRepository;
+    private final DespesaRepository despesaRepository;
+    private final ParticipanteRepository participanteRepository;
+
+    public FinalizacaoGrupoService(GrupoRepository grupoRepository,
+                                    TransacaoAcertoRepository transacaoRepository,
+                                    DespesaRepository despesaRepository,
+                                    ParticipanteRepository participanteRepository) {
+        this.grupoRepository = grupoRepository;
+        this.transacaoRepository = transacaoRepository;
+        this.despesaRepository = despesaRepository;
+        this.participanteRepository = participanteRepository;
+    }
+
+    @Transactional
+    public ResumoFinalizacaoResponse finalizar(Long grupoId, Long solicitanteParticipanteId) {
+
+        Grupo grupo = grupoRepository.findById(grupoId).orElse(null);
+        if (grupo == null) {
+            throw new RecursoNaoEncontradoException("Grupo não encontrado");
+        }
+
+        Optional<Participante> solicitante = participanteRepository
+            .findByGrupoIdAndUsuarioId(grupoId, solicitanteParticipanteId);
+
+        if (solicitante.isEmpty()) {
+            throw new AcessoNegadoException("Usuário não é participante do grupo");
+        }
+
+        if (grupo.getStatus() == StatusGrupo.FINALIZADO) {
+            throw new ValidacaoException("Grupo já está finalizado");
+        }
+
+        if (grupo.getStatus() != StatusGrupo.ENCERRAMENTO_DE_ACERTO) {
+            throw new ConflitoDeEstadoException("Grupo não está em fase de encerramento de acerto");
+        }
+
+        boolean todasConfirmadas = !transacaoRepository
+            .existsByParticipante_Grupo_IdAndStatusTransacaoNot(grupoId, StatusTransacao.CONFIRMADA);
+
+        if (!todasConfirmadas) {
+            throw new ConflitoDeEstadoException("Nem todas as transações de pagamento estão confirmadas");
+        }
+
+        LocalDateTime agora = LocalDateTime.now();
+
+        grupo.setStatus(StatusGrupo.FINALIZADO);
+        grupo.setFinalizadoEm(agora);
+        grupoRepository.save(grupo);
+
+        return montarResumo(grupoId, grupo.getStatus().name(), agora);
+    }
+
+    public ResumoFinalizacaoResponse buscarResumo(Long grupoId) {
+        Grupo grupo = grupoRepository.findById(grupoId).orElse(null);
+        if (grupo == null) {
+            throw new RecursoNaoEncontradoException("Grupo não encontrado");
+        }
+
+        return montarResumo(grupoId, grupo.getStatus().name(), grupo.getFinalizadoEm());
+    }
+
+    private ResumoFinalizacaoResponse montarResumo(Long grupoId, String statusGrupo, LocalDateTime finalizadoEm) {
+
+        List<TransacaoAcerto> transacoes = transacaoRepository.findByParticipante_Grupo_Id(grupoId);
+
+        BigDecimal totalMovimentado = BigDecimal.ZERO;
+        for (TransacaoAcerto t : transacoes) {
+            totalMovimentado = totalMovimentado.add(t.getValor());
+        }
+
+        int totalParticipantes = participanteRepository.findByGrupoId(grupoId).size();
+        int totalDespesas = despesaRepository.countByGrupoId(grupoId);
+        int transacoesRealizadas = transacoes.size();
+
+        return new ResumoFinalizacaoResponse(
+            grupoId,
+            statusGrupo,
+            new ResumoFinalizacaoResponse.ResumoDetalhado(
+                totalMovimentado, totalParticipantes, totalDespesas, transacoesRealizadas, finalizadoEm
+            )
+        );
+    }
+}
