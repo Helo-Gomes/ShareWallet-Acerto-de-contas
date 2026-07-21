@@ -1,0 +1,29 @@
+package com.bradesco.sharewallet.Controllers;
+
+import com.bradesco.sharewallet.Services.FinalizacaoGrupoService;
+import com.bradesco.sharewallet.dto.ResumoFinalizacaoResponse;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/grupos")
+public class FinalizacaoGrupoController {
+
+    private final FinalizacaoGrupoService finalizacaoGrupoService;
+
+    public FinalizacaoGrupoController(FinalizacaoGrupoService finalizacaoGrupoService) {
+        this.finalizacaoGrupoService = finalizacaoGrupoService;
+    }
+
+    @PutMapping("/{id}/finalizar")
+    public ResponseEntity<ResumoFinalizacaoResponse> finalizar(
+            @PathVariable Long id,
+            @RequestParam Long solicitanteParticipanteId) {
+        return ResponseEntity.ok(finalizacaoGrupoService.finalizar(id, solicitanteParticipanteId));
+    }
+
+    @GetMapping("/{id}/resumo")
+    public ResponseEntity<ResumoFinalizacaoResponse> resumo(@PathVariable Long id) {
+        return ResponseEntity.ok(finalizacaoGrupoService.buscarResumo(id));
+    }
+}
